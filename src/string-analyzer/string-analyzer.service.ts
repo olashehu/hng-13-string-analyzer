@@ -73,7 +73,7 @@ export class StringAnalyzerService {
 
   async analyzeAndSave(value: string): Promise<StringAnalyzer> {
     try {
-      //   check if the string analysis already exists
+      //   check if the string analyzer already exists
       const existing = await this.repo.findOne({ where: { value } });
       if (existing) {
         throw new ConflictException('String already exists in the system');
@@ -84,15 +84,6 @@ export class StringAnalyzerService {
         throw new BadRequestException('String value must not be empty');
       }
 
-      //  invalid data type check
-      //   const alphabetRegex = /^[A-Za-z0-9\s.,!?@#&$%'"()[\]\-_:;]+$/;
-
-      //   if (!alphabetRegex.test(value)) {
-      //     throw new UnprocessableEntityException(
-      //       'Invalid data type for value (must be string)',
-      //     );
-      //   }
-
       // invalid data type check
       if (typeof value !== 'string') {
         throw new UnprocessableEntityException(
@@ -100,7 +91,7 @@ export class StringAnalyzerService {
         );
       }
 
-      // Implementation of string analysis and saving to the database
+      // Implementation of string analyzer and saving to the database
       const sha256Hash = crypto
         .createHash('sha256')
         .update(value)
@@ -110,7 +101,6 @@ export class StringAnalyzerService {
       const uniqueCharacters = new Set(value).size;
       const wordCount =
         value.trim() === '' ? 0 : value.trim().split(/\s+/).length;
-      console.log('Word Count:', wordCount);
 
       const characterFrequencyMap: Record<string, number> = {};
       for (const char of value) {
@@ -132,7 +122,13 @@ export class StringAnalyzerService {
         properties,
       });
 
-      return this.repo.save(stringAnalyzer);
+      const result = await this.repo.save(stringAnalyzer);
+      return {
+        id: result.id,
+        value: result.value,
+        properties: result.properties,
+        created_at: result.created_at,
+      };
     } catch (error) {
       console.log('Error in analyzeAndSave:', error);
       if (
@@ -147,16 +143,20 @@ export class StringAnalyzerService {
 
   async getbyValue(value: string): Promise<StringAnalyzer | null> {
     try {
-      const stringAnalyzer = await this.repo.findOne({ where: { value } });
-      if (!stringAnalyzer) {
+      const result = await this.repo.findOne({ where: { value } });
+      if (!result) {
         throw new NotFoundException('String analysis not found');
       }
-      return stringAnalyzer;
+      return {
+        id: result?.id,
+        value: result?.value,
+        properties: result?.properties,
+        created_at: result?.created_at,
+      };
     } catch (error) {
       if (error instanceof NotFoundException) {
         throw error;
       }
-      console.log('Error in getbyValue:', error);
       throw new Error('Internal Server Error');
     }
   }

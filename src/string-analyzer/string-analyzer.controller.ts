@@ -19,24 +19,15 @@ export class StringAnalyzerController {
 
   @Post()
   async analyze(@Body('value') value: string) {
-    const result = await this.service.analyzeAndSave(value);
-    return {
-      id: result.id,
-      value: result.value,
-      properties: result.properties,
-      created_at: result.created_at,
-    };
+    return await this.service.analyzeAndSave(value);
   }
 
   @Get('filter-by-natural-language')
   async filterByNaturalLanguage(@Query('query') query: string) {
-    console.log('Hello from getAllAnalyses');
-    console.log('Received query:', query);
     if (!query || query.trim() === '') {
       throw new BadRequestException('Query parameter is required');
     }
     try {
-      console.log('Parsing natural language query:');
       const parsedFilters = this.service.parseNaturalQuery(query.toLowerCase());
 
       if (!parsedFilters || Object.keys(parsedFilters).length === 0) {
@@ -66,13 +57,7 @@ export class StringAnalyzerController {
 
   @Get(':value')
   async getAnalysis(@Param('value') value: string) {
-    const result = await this.service.getbyValue(value);
-    return {
-      id: result?.id,
-      value: result?.value,
-      properties: result?.properties,
-      created_at: result?.created_at,
-    };
+    return await this.service.getbyValue(value);
   }
 
   @Get()
