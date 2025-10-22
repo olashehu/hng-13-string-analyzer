@@ -19,6 +19,7 @@ export class StringAnalyzerController {
 
   @Post()
   async analyze(@Body('value') value: string) {
+    console.log('Received value for analysis:', value);
     return await this.service.analyzeAndSave(value);
   }
 
