@@ -89,11 +89,11 @@ Your API will be available at 👉 http://localhost:3000
 }
 ```
 ## Get a String Analysis
-### GET #####```/strings/madam```
+### GET```/strings/madam```
 ## Get All with Filters
-##  GET #####```/strings?is_palindrome=true&min_length=3&contains_character=a```
+##  GET```/strings?is_palindrome=true&min_length=3&contains_character=a```
 ## Filter by Natural Language
-### GET #####```/strings/filter-by-natural-language?query=all%20single%20word%20palindromic%20strings```
+### GET```/strings/filter-by-natural-language?query=all%20single%20word%20palindromic%20strings```
 
 ## 📦 Dependencies
 | Package           | Description                      |
