@@ -18,6 +18,10 @@ export class StringAnalyzerService {
     private readonly repo: Repository<StringAnalyzer>,
   ) {}
 
+  /**
+   * Parse natural language queries into filters.
+   * Throws UnprocessableEntityException if filters conflict.
+   */
   parseNaturalQuery(query: string): {
     is_palindrome?: boolean;
     word_count?: number;
@@ -33,78 +37,96 @@ export class StringAnalyzerService {
       contains_character?: string;
     } = {};
 
-    // palindromic
-    if (query.includes('palindromic') || query.includes('palindrome')) {
+    // Basic keywords
+    if (/palindrom/i.test(query)) {
       filters.is_palindrome = true;
     }
 
-    // single word or multi-word
-    if (query.includes('single word')) {
+    if (/single word/i.test(query)) {
       filters.word_count = 1;
     } else {
-      const wordMatch = query.match(/(\d+)\s+words?/);
-      if (wordMatch) {
-        filters.word_count = parseInt(wordMatch[1], 10);
-      }
+      const wordMatch = query.match(/(\d+)\s+words?/i);
+      if (wordMatch) filters.word_count = parseInt(wordMatch[1], 10);
     }
 
-    // length conditions
-    const longerMatch = query.match(/longer than\s+(\d+)/);
-    if (longerMatch) {
-      filters.min_length = parseInt(longerMatch[1], 10) + 1;
-    }
-    const shorterMatch = query.match(/shorter than\s+(\d+)/);
-    if (shorterMatch) {
-      filters.max_length = parseInt(shorterMatch[1], 10) - 1;
-    }
+    const longerMatch = query.match(/(?:longer than|more than)\s+(\d+)/i);
+    if (longerMatch) filters.min_length = parseInt(longerMatch[1], 10) + 1;
 
-    // contains character
-    const containingLetterMatch = query.match(
-      /containing the letter\s+([a-z])/,
+    const shorterMatch = query.match(/(?:shorter than|less than)\s+(\d+)/i);
+    if (shorterMatch) filters.max_length = parseInt(shorterMatch[1], 10) - 1;
+
+    // contains specific letter: "containing the letter z" or "containing z"
+    const containsMatch = query.match(
+      /(?:containing the letter|containing|contains)\s+([a-z])/i,
     );
-    if (containingLetterMatch) {
-      filters.contains_character = containingLetterMatch[1];
-    } else if (query.match(/contain(s)? the first vowel/)) {
-      filters.contains_character = 'a'; // heuristic
+    if (containsMatch)
+      filters.contains_character = containsMatch[1].toLowerCase();
+
+    // heuristic: "first vowel" -> 'a'
+    if (/first vowel/i.test(query) && !filters.contains_character) {
+      filters.contains_character = 'a';
+    }
+
+    // validate logical consistency
+    if (
+      typeof filters.min_length !== 'undefined' &&
+      typeof filters.max_length !== 'undefined' &&
+      filters.min_length > filters.max_length
+    ) {
+      throw new UnprocessableEntityException(
+        'Query parsed but resulted in conflicting filters',
+      );
+    }
+
+    if (filters.word_count !== undefined && filters.word_count < 0) {
+      throw new UnprocessableEntityException(
+        'Query parsed but resulted in conflicting filters',
+      );
     }
 
     return filters;
   }
 
+  /**
+   * Analyze and save a string
+   * - throws:
+   *   - ConflictException (409) if duplicate
+   *   - BadRequestException (400) if empty
+   *   - UnprocessableEntityException (422) if wrong type
+   */
   async analyzeAndSave(value: string): Promise<StringAnalyzer> {
     try {
-      //   check if the string analyzer already exists
-      const existing = await this.repo.findOne({ where: { value } });
-      if (existing) {
-        throw new ConflictException('String analysis already exists');
-      }
-
-      // invalid data type check
       if (typeof value !== 'string') {
         throw new UnprocessableEntityException(
           'Invalid data type for value (must be string)',
         );
       }
-      //   if (typeof value !== 'string') {
-      //     throw new UnprocessableEntityException(
-      //       'Invalid data type for value (must be string)',
-      //     );
-      //   }
 
-      //   check if the string is empty
       if (value.trim() === '') {
         throw new BadRequestException(
-          ' Invalid request body or missing "value" field',
+          'Invalid request body or missing "value" field',
         );
       }
 
-      // Implementation of string analyzer and saving to the database
+      // compute sha256 hash of the raw value
       const sha256Hash = crypto
         .createHash('sha256')
         .update(value)
         .digest('hex');
 
-      const isPalindrome = value === value.split('').reverse().join('');
+      // check duplicate by id (hash) or by value
+      const existingById = await this.repo.findOne({
+        where: { id: sha256Hash },
+      });
+      if (existingById) {
+        throw new ConflictException('String analysis already exists');
+      }
+
+      // normalized for palindrome check: remove non-alphanumeric and lower-case
+      const normalized = value.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const isPalindrome =
+        normalized === normalized.split('').reverse().join('');
+
       const uniqueCharacters = new Set(value).size;
       const wordCount =
         value.trim() === '' ? 0 : value.trim().split(/\s+/).length;
@@ -130,45 +152,54 @@ export class StringAnalyzerService {
       });
 
       const result = await this.repo.save(stringAnalyzer);
+
       return {
         id: result.id,
         value: result.value,
         properties: result.properties,
         created_at: result.created_at,
       };
-    } catch (error) {
-      console.log('Error in analyzeAndSave:', error);
+    } catch (err) {
+      // rethrow known errors so controller can handle status codes
       if (
-        error instanceof BadRequestException ||
-        error instanceof ConflictException ||
-        error instanceof UnprocessableEntityException
+        err instanceof BadRequestException ||
+        err instanceof ConflictException ||
+        err instanceof UnprocessableEntityException
       ) {
-        throw error;
+        throw err;
       }
-      throw new Error('Internal Server Error');
+      console.error('Error in analyzeAndSave:', err);
+      throw new UnprocessableEntityException('Internal Server Error');
     }
   }
 
-  async getbyValue(value: string): Promise<StringAnalyzer | null> {
+  /**
+   * Find by value
+   * - 404 if not found
+   */
+  async getbyValue(value: string): Promise<StringAnalyzer> {
     try {
       const result = await this.repo.findOne({ where: { value } });
       if (!result) {
         throw new NotFoundException('String does not exist in the system');
       }
       return {
-        id: result?.id,
-        value: result?.value,
-        properties: result?.properties,
-        created_at: result?.created_at,
+        id: result.id,
+        value: result.value,
+        properties: result.properties,
+        created_at: result.created_at,
       };
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      throw new Error('Internal Server Error');
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      console.error('Error in getbyValue:', err);
+      throw new UnprocessableEntityException('Internal Server Error');
     }
   }
 
+  /**
+   * Get all with filters (filters validated by controller)
+   * returns [] when no result
+   */
   async getAllWithFilters(filters: {
     is_palindrome?: boolean;
     min_length?: number;
@@ -182,18 +213,19 @@ export class StringAnalyzerService {
       if (typeof filters.is_palindrome !== 'undefined') {
         if (typeof filters.is_palindrome !== 'boolean') {
           throw new BadRequestException(
-            "Invalid type for 'is_palindrome'. Expected boolean.",
+            'Invalid query parameter values or types',
           );
         }
+        // compare text value 'true'/'false'
         query = query.andWhere("s.properties ->> 'is_palindrome' = :ispal", {
           ispal: filters.is_palindrome ? 'true' : 'false',
         });
       }
 
-      if (filters.min_length !== undefined) {
+      if (typeof filters.min_length !== 'undefined') {
         if (typeof filters.min_length !== 'number') {
           throw new BadRequestException(
-            "Invalid type for 'min_length'. Expected number.",
+            'Invalid query parameter values or types',
           );
         }
         query = query.andWhere(
@@ -202,10 +234,10 @@ export class StringAnalyzerService {
         );
       }
 
-      if (filters.max_length !== undefined) {
+      if (typeof filters.max_length !== 'undefined') {
         if (typeof filters.max_length !== 'number') {
           throw new BadRequestException(
-            "Invalid type for 'max_length'. Expected number.",
+            'Invalid query parameter values or types',
           );
         }
         query = query.andWhere(
@@ -214,10 +246,10 @@ export class StringAnalyzerService {
         );
       }
 
-      if (filters.word_count !== undefined) {
+      if (typeof filters.word_count !== 'undefined') {
         if (typeof filters.word_count !== 'number') {
           throw new BadRequestException(
-            "Invalid type for 'word_count'. Expected number.",
+            'Invalid query parameter values or types',
           );
         }
         query = query.andWhere(
@@ -226,10 +258,13 @@ export class StringAnalyzerService {
         );
       }
 
-      if (filters.contains_character !== undefined) {
-        if (typeof filters.contains_character !== 'string') {
+      if (typeof filters.contains_character !== 'undefined') {
+        if (
+          typeof filters.contains_character !== 'string' ||
+          filters.contains_character.length !== 1
+        ) {
           throw new BadRequestException(
-            "Invalid type for 'contains_character'. Expected string.",
+            'Invalid query parameter values or types',
           );
         }
         query = query.andWhere(
@@ -238,16 +273,23 @@ export class StringAnalyzerService {
         );
       }
 
-      return await query.getMany();
-    } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      console.error('Error in getAllWithFilters:', error);
-      throw new BadRequestException('Internal Server Error');
+      const rows = await query.getMany();
+      return rows.map((r) => ({
+        id: r.id,
+        value: r.value,
+        properties: r.properties,
+        created_at: r.created_at,
+      })) as StringAnalyzer[];
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      console.error('Error in getAllWithFilters:', err);
+      throw new BadRequestException('Invalid query parameter values or types');
     }
   }
 
+  /**
+   * Delete by value
+   */
   async deleteByValue(value: string): Promise<void> {
     try {
       const stringAnalyzer = await this.repo.findOne({ where: { value } });
@@ -255,63 +297,10 @@ export class StringAnalyzerService {
         throw new NotFoundException('String does not exist in the system');
       }
       await this.repo.remove(stringAnalyzer);
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      console.log('Error in deleteByValue:', error);
-      throw new Error('Internal Server Error');
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      console.error('Error in deleteByValue:', err);
+      throw new UnprocessableEntityException('Internal Server Error');
     }
   }
-
-  //   async getAllWithFilters(filters: {
-  //     is_palindrome?: boolean;
-  //     min_length?: number;
-  //     max_length?: number;
-  //     word_count?: number;
-  //     contains_character?: string;
-  //   }): Promise<StringAnalyzer[]> {
-  //     try {
-  //       let query = this.repo.createQueryBuilder('s');
-
-  //       if (typeof filters.is_palindrome !== 'undefined') {
-  //         query = query.andWhere("s.properties ->> 'is_palindrome' = :ispal", {
-  //           ispal: filters.is_palindrome ? 'true' : 'false',
-  //         });
-  //       }
-
-  //       if (filters.min_length !== undefined) {
-  //         query = query.andWhere(
-  //           "CAST(s.properties ->> 'length' AS INTEGER) >= :min_length",
-  //           { min_length: filters.min_length },
-  //         );
-  //       }
-
-  //       if (filters.max_length !== undefined) {
-  //         query = query.andWhere(
-  //           "CAST(s.properties ->> 'length' AS INTEGER) <= :max_length",
-  //           { max_length: filters.max_length },
-  //         );
-  //       }
-
-  //       if (filters.word_count !== undefined) {
-  //         query = query.andWhere(
-  //           "CAST(s.properties ->> 'word_count' AS INTEGER) = :word_count",
-  //           { word_count: filters.word_count },
-  //         );
-  //       }
-
-  //       if (filters.contains_character !== undefined) {
-  //         query = query.andWhere(
-  //           "s.properties -> 'character_frequency_map' ? :contains_character",
-  //           { contains_character: filters.contains_character },
-  //         );
-  //       }
-
-  //       return query.getMany();
-  //     } catch (error) {
-  //       console.error('Error in getAllWithFilters:', error);
-  //       throw new Error('Internal Server Error');
-  //     }
-  //   }
 }
