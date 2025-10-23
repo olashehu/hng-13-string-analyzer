@@ -15,7 +15,7 @@ import { StringAnalyzer } from './string-analyzer/entities/string-analyzer.entit
         type: 'postgres',
         url: configService.get<string>('DATABASE_URL'),
         entities: [StringAnalyzer],
-        // synchronize: true,
+        synchronize: true,
       }),
       inject: [ConfigService],
     }),

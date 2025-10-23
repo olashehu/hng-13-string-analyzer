@@ -19,22 +19,36 @@ export class StringAnalyzerController {
 
   @Post()
   async analyze(@Body('value') value: string) {
-    console.log('Received value for analysis:', value);
     return await this.service.analyzeAndSave(value);
   }
 
   @Get('filter-by-natural-language')
   async filterByNaturalLanguage(@Query('query') query: string) {
+    // ✅ Validate presence of query
     if (!query || query.trim() === '') {
       throw new BadRequestException('Query parameter is required');
     }
+
     try {
+      // Normalize and parse the natural language query
       const parsedFilters = this.service.parseNaturalQuery(query.toLowerCase());
 
+      // ✅ Case 1: Unable to parse the natural language query (empty or invalid)
       if (!parsedFilters || Object.keys(parsedFilters).length === 0) {
         throw new BadRequestException('Unable to parse natural language query');
       }
+
+      // ✅ Fetch results using parsed filters
       const data = await this.service.getAllWithFilters(parsedFilters);
+
+      // ✅ Case 2: Query parsed but resulted in conflicting filters or invalid data
+      if (!data || data.length === 0) {
+        throw new UnprocessableEntityException(
+          'Query parsed but resulted in conflicting filters',
+        );
+      }
+
+      // ✅ Success response
       return {
         data: data.map((d) => ({
           id: d.id,
@@ -49,9 +63,18 @@ export class StringAnalyzerController {
         },
       };
     } catch (error) {
-      if (error instanceof BadRequestException) throw error;
+      // Re-throw known application exceptions
+      if (
+        error instanceof BadRequestException ||
+        error instanceof UnprocessableEntityException
+      ) {
+        throw error;
+      }
+
+      // Catch unexpected errors gracefully
+      console.error('Error in filterByNaturalLanguage:', error);
       throw new UnprocessableEntityException(
-        'Query parsed but invalid filters',
+        'Query parsed but resulted in conflicting filters',
       );
     }
   }
@@ -69,20 +92,58 @@ export class StringAnalyzerController {
     @Query('word_count') word_count: string,
     @Query('contains_character') contains_character: string,
   ) {
-    const filters = {
-      is_palindrome:
-        is_palindrome !== undefined ? is_palindrome === 'true' : undefined,
-      min_length: min_length ? Number(min_length) : undefined,
-      max_length: max_length ? Number(max_length) : undefined,
-      word_count: word_count ? Number(word_count) : undefined,
-      contains_character: contains_character || undefined,
-    };
+    const filters: {
+      is_palindrome?: boolean;
+      min_length?: number;
+      max_length?: number;
+      word_count?: number;
+      contains_character?: string;
+    } = {};
+
+    try {
+      // Validate is_palindrome
+      if (is_palindrome !== undefined) {
+        if (is_palindrome !== 'true' && is_palindrome !== 'false') {
+          throw new Error();
+        }
+        filters.is_palindrome = is_palindrome === 'true';
+      }
+
+      // Validate numeric fields
+      const numericParams = [
+        { key: 'min_length', value: min_length },
+        { key: 'max_length', value: max_length },
+        { key: 'word_count', value: word_count },
+      ];
+
+      for (const param of numericParams) {
+        if (param.value !== undefined) {
+          const num = Number(param.value);
+          if (isNaN(num) || num < 0) throw new Error();
+          filters[param.key] = num;
+        }
+      }
+
+      // Validate contains_character (must be single char)
+      if (contains_character !== undefined) {
+        if (
+          typeof contains_character !== 'string' ||
+          contains_character.length !== 1
+        ) {
+          throw new Error();
+        }
+        filters.contains_character = contains_character.toLowerCase();
+      }
+    } catch {
+      throw new BadRequestException('Invalid query parameter values or types');
+    }
 
     const data = await this.service.getAllWithFilters(filters);
 
     if (!data || data.length === 0) {
       throw new NotFoundException('String does not exist in the system');
     }
+
     return {
       data: data.map((result) => ({
         id: result.id,
